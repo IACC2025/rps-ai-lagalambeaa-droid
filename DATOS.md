@@ -81,7 +81,7 @@ Si capturaste datos extra ademas de los basicos, marcalos aqui:
 - [ ] `tiempo_reaccion_ms` - Tiempo que tardo el jugador en responder
 - [ ] `timestamp` - Fecha/hora de cada jugada
 - [X] `sesion` - ID de sesion de juego
-- [ ] `resultado` - victoria/derrota/empate
+- [X] `resultado` - victoria/derrota/empate
 - [ ] Otro: _________________
 
 ### Descripcion de datos adicionales:
