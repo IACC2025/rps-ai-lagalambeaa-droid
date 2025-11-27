@@ -40,7 +40,7 @@ Marca con [x] el metodo usado y describe brevemente:
 
 ```
 Se hizo un programa para la recogida de datos en Python,
-el cual se puede encontrar en la carpeta src.
+el cual se puede encontrar en la carpeta src con el nombre "rpsData.py".
 El programa funciona de la siguiente manera: 
 Este programa permite registrar partidas de Piedra, Papel o Tijera entre dos jugadores (Adrián e Iván) y almacenar los resultados en un archivo CSV para su posterior análisis.
 Cómo funciona el programa
