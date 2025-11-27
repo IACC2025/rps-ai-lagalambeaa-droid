@@ -1,6 +1,6 @@
 # Documentacion de Recogida de Datos
 
-**Alumno:** ___________________
+**Alumno:** Iván Ezquerro Muñoz y Adrián Laga Lambea
 
 ## Formato del CSV
 
