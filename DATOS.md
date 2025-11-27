@@ -39,8 +39,9 @@ Marca con [x] el metodo usado y describe brevemente:
 ### Descripcion del proceso:
 
 ```
-(Explica aqui como recogiste los datos. Si usaste un programa,
-describe brevemente como funciona. Si fue manual, explica el proceso.)
+Se hizo un programa para la recogida de datos en Python,
+el cual se puede encontrar en la carpeta src.
+El programa funciona de la siguiente manera: 
 Este programa permite registrar partidas de Piedra, Papel o Tijera entre dos jugadores (Adrián e Iván) y almacenar los resultados en un archivo CSV para su posterior análisis.
 Cómo funciona el programa
 1. Entrada de datos
@@ -80,28 +81,29 @@ Si capturaste datos extra ademas de los basicos, marcalos aqui:
 
 - [ ] `tiempo_reaccion_ms` - Tiempo que tardo el jugador en responder
 - [ ] `timestamp` - Fecha/hora de cada jugada
-- [ ] `sesion` - ID de sesion de juego
+- [X] `sesion` - ID de sesion de juego
 - [ ] `resultado` - victoria/derrota/empate
 - [ ] Otro: _________________
 
 ### Descripcion de datos adicionales:
 
 ```
-(Si capturaste datos extra, explica aqui por que y como los usas)
-
-
+Capturamos los set de partida, cada set es de tres partidas. 
+Los capturamos para poder ver los resultados
+de cada set y tomarnos las partidas mas en serio sin que
+sean un montón de partidas sin objetivo claro.
 ```
 
 ---
 
 ## Estadisticas del dataset
 
-- **Total de rondas:** _____
-- **Numero de sesiones/partidas:** _____
-- **Contra cuantas personas diferentes:** _____
+- **Total de rondas:** 162
+- **Numero de sesiones/partidas:** 54
+- **Contra cuantas personas diferentes:** 1
 
 ### Tipo de IA:
 
-- [ ] **IA Especifica**: Entrenada para ganar a UNA persona concreta
-  - Nombre/identificador del oponente: _________________
+- [X] **IA Especifica**: Entrenada para ganar a UNA persona concreta
+  - Nombre/identificador del oponente: Iván
 - [ ] **IA General**: Entrenada para ganar a cualquier oponente
