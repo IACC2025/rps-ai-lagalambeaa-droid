@@ -70,8 +70,6 @@ Ventajas de este método
     Escalable: Permite registrar tantos sets como se desee
     Trazable: Cada partida queda identificada por set y número
     Reutilizable: El CSV puede analizarse con pandas, Excel o cualquier herramienta de análisis de datos
-
-
 ```
 ---
 
