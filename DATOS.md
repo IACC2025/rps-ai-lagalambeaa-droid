@@ -41,8 +41,34 @@ Marca con [x] el metodo usado y describe brevemente:
 ```
 (Explica aqui como recogiste los datos. Si usaste un programa,
 describe brevemente como funciona. Si fue manual, explica el proceso.)
+Este programa permite registrar partidas de Piedra, Papel o Tijera entre dos jugadores (Adrián e Iván) y almacenar los resultados en un archivo CSV para su posterior análisis.
+Cómo funciona el programa
+1. Entrada de datos
+Los jugadores introducen sus jugadas mediante el teclado usando las letras:
+    p = piedra
+    l = papel (del inglés leaf o inspirado en hoja)
+    t = tijera
+2. Determinación del ganador
+    La función determinar_ganador() evalúa las jugadas según las reglas clásicas:
+        Piedra vence a Tijera
+        Tijera vence a Papel
+        Papel vence a Piedra
+        Jugadas iguales resultan en empate
+3. Estructura de sets
+    Cada set consta de 3 partidas
+    Después de cada set, el programa pregunta si desean continuar
+    Los jugadores pueden registrar múltiples sets en una misma sesión
+4. Almacenamiento de datos
+    Los resultados se guardan en datos_ppt_ai.csv con la siguiente estructura:
+5. Validación de entradas
+    El programa verifica que las entradas sean válidas (p/l/t) y solicita reingresar datos en caso de error, asegurando la integridad de los datos registrados.
 
-
+Ventajas de este método
+    Automático: No requiere transcripción manual posterior
+    Estructurado: Los datos quedan organizados desde el inicio
+    Escalable: Permite registrar tantos sets como se desee
+    Trazable: Cada partida queda identificada por set y número
+    Reutilizable: El CSV puede analizarse con pandas, Excel o cualquier herramienta de análisis de datos
 
 
 ```
