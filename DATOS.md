@@ -31,7 +31,7 @@ Marca con [x] el metodo usado y describe brevemente:
 
 ### Metodo de recogida:
 
-- [ ] **Programa propio**: Cree un programa para jugar y guardar datos
+- [X] **Programa propio**: Cree un programa para jugar y guardar datos
 - [ ] **Manual**: Jugue partidas y apunte los resultados a mano
 - [ ] **Aplicacion/Web externa**: Use una app y exporte los datos
 - [ ] **Otro**: _________________
