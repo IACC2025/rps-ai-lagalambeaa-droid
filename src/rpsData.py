@@ -26,7 +26,7 @@ def registrar_sets_reales(nombre_archivo="datos_ppt_ai.csv"):
     Registro de partidas entre dos jugadores reales: Adrián e Iván
     """
     jugador1 = "Adrián"
-    jugador2 = "Jose"
+    jugador2 = "Iván"
 
     nuevo_archivo = not os.path.exists(nombre_archivo)
     with open(nombre_archivo, mode="a", newline="", encoding="utf-8") as archivo:
