@@ -210,7 +210,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Evalua el winrate de tu modelo de IA")
-    parser.add_argument("-n", "--rondas", type=int, default=50,
+    parser.add_argument("-n", "--rondas", type=int, default=25,
                         help="Numero de rondas a jugar (default: 50)")
     args = parser.parse_args()
 
