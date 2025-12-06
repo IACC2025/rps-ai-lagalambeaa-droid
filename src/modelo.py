@@ -1,12 +1,14 @@
 """
-RPSAI - Modelo de IA para Piedra, Papel o Tijera (Versión Híbrida v4.0)
-=======================================================================
-ARQUITECTURA:
-1. Nivel 0 (Reflejo): Anti-Spam agresivo (si repites 2 veces, te caza).
-2. Nivel 1 (Memoria Viva): Búsqueda de N-Gramas en la sesión actual.
-3. Nivel 2 (Intuición): Modelo Gradient Boosting pre-entrenado.
+RPSAI - Modelo de IA para Piedra, Papel o Tijera (Versión Ensamble v5.0)
+========================================================================
+ARQUITECTURA DE VOTO PONDERADO:
+Combina predicciones de 3 fuentes distintas para tomar la decisión más robusta.
 
-Esta versión APRENDE mientras juega.
+1. Modelo ML (Gradient Boosting): Peso dinámico basado en confianza.
+2. Cadenas de Markov (Live): Detecta secuencias exactas en la partida actual.
+3. Anti-Spam / Frecuencia: Penaliza jugadas sobre-utilizadas por el rival.
+
+MEJORA CLAVE: Reducción de empates mediante predicción probabilística combinada.
 """
 
 import os
@@ -18,9 +20,8 @@ from collections import defaultdict
 import pandas as pd
 import numpy as np
 
-# Modelos
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score
 from sklearn.ensemble import GradientBoostingClassifier
 
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
@@ -45,27 +46,27 @@ SENTINEL_VALUE = -1
 GANA_A = {"piedra": "tijera", "papel": "piedra", "tijera": "papel"}
 PIERDE_CONTRA = {"piedra": "papel", "papel": "tijera", "tijera": "piedra"}
 
-
 # =============================================================================
-# PARTE 1: PREPARACIÓN DE DATOS
+# 1. PREPARACIÓN DE DATOS
 # =============================================================================
 
 def cargar_datos(ruta_csv: Path = None) -> pd.DataFrame:
     if ruta_csv is None: ruta_csv = RUTA_DATOS
     if not ruta_csv.exists():
-        raise FileNotFoundError(f"Falta archivo: {ruta_csv}")
+        # Si no existe, creamos un dummy para que no falle y la IA aprenda en vivo
+        print("⚠️ No hay CSV. Se creará un DataFrame vacío.")
+        return pd.DataFrame(columns=['jugada_jugador1', 'jugada_jugador2'])
 
     df = pd.read_csv(ruta_csv)
-    # Normalizar columnas
     cols = df.columns
     if 'jugada_jugador' in cols:
         df = df.rename(columns={'jugada_jugador': 'jugada_jugador1', 'jugada_oponente': 'jugada_jugador2'})
     elif len(cols) >= 2 and 'jugada_jugador1' not in cols:
         df.columns = ['jugada_jugador1', 'jugada_jugador2'] + list(cols[2:])
-
     return df
 
 def preparar_datos(df: pd.DataFrame) -> pd.DataFrame:
+    if len(df) == 0: return df
     df = df.copy().rename(columns={'jugada_jugador1': 'jugada_j1', 'jugada_jugador2': 'jugada_j2'})
     validas = set(JUGADA_A_NUM.keys())
     df = df[df['jugada_j1'].isin(validas) & df['jugada_j2'].isin(validas)]
@@ -74,7 +75,6 @@ def preparar_datos(df: pd.DataFrame) -> pd.DataFrame:
     df['jugada_j2_num'] = df['jugada_j2'].map(JUGADA_A_NUM)
     df['proxima_jugada_j2'] = df['jugada_j2_num'].shift(-1)
 
-    # Resultado (1: Gana J1, -1: Gana J2)
     def calc_res(row):
         j1, j2 = row['jugada_j1'], row['jugada_j2']
         if j1 == j2: return 0
@@ -83,205 +83,238 @@ def preparar_datos(df: pd.DataFrame) -> pd.DataFrame:
     df['resultado'] = df.apply(calc_res, axis=1)
     return df.dropna(subset=['proxima_jugada_j2'])
 
-
 # =============================================================================
-# PARTE 2: FEATURE ENGINEERING
+# 2. FEATURE ENGINEERING
 # =============================================================================
 
 def crear_features(df: pd.DataFrame) -> pd.DataFrame:
+    if len(df) < 5: return df
     df = df.copy()
 
-    # 1. Lags (Historial inmediato)
+    # Lags
     df['j2_lag1'] = df['jugada_j2_num'].shift(1)
     df['j2_lag2'] = df['jugada_j2_num'].shift(2)
     df['j1_lag1'] = df['jugada_j1_num'].shift(1)
+    df['j1_lag2'] = df['jugada_j1_num'].shift(2)
 
-    # 2. Secuencias
+    # Secuencias complejas
     df['seq_j2_2'] = df['jugada_j2_num'].shift(1)*10 + df['jugada_j2_num'].shift(2)
+    df['seq_mix_2'] = df['jugada_j2_num'].shift(1)*10 + df['jugada_j1_num'].shift(1) # Tu jugada + Mi jugada
 
-    # 3. Frecuencias (Window 10)
+    # Frecuencias Rolling
     for n in [0, 1, 2]:
         df[f'roll_freq_{n}'] = (df['jugada_j2_num'] == n).rolling(10, min_periods=1).mean().shift(1)
 
-    # 4. Patrones de Respuesta
-    # ¿Qué jugó J2 cuando ganó/perdió la última vez?
-    df['j2_tras_ganar'] = np.where(df['resultado'].shift(2) == -1, df['jugada_j2_num'].shift(1), -1)
-    df['j2_tras_perder'] = np.where(df['resultado'].shift(2) == 1, df['jugada_j2_num'].shift(1), -1)
-
-    # 5. CWP (Counter Winner Previous)
-    # ¿Juega lo que le ganó a su jugada anterior?
-    def get_counter(val):
-        if pd.isna(val) or val == -1: return -1
-        return JUGADA_A_NUM[PIERDE_CONTRA[NUM_A_JUGADA[int(val)]]]
-
-    df['cwp_signal'] = df['j2_lag1'].apply(get_counter)
+    # Lógica WSLS (Win-Stay, Lose-Shift)
+    # Si ganó la anterior (res=-1 para la IA), ¿repitió jugada?
+    df['wsls_trend'] = np.where(
+        (df['resultado'].shift(2) == -1) & (df['jugada_j2_num'].shift(1) == df['jugada_j2_num'].shift(2)),
+        1, 0
+    )
 
     return df
 
 def seleccionar_features(df: pd.DataFrame):
+    if len(df) < 10: return None, None
     cols = [
-        'j2_lag1', 'j2_lag2', 'j1_lag1',
-        'seq_j2_2',
+        'j2_lag1', 'j2_lag2', 'j1_lag1', 'j1_lag2',
+        'seq_j2_2', 'seq_mix_2',
         'roll_freq_0', 'roll_freq_1', 'roll_freq_2',
-        'j2_tras_ganar', 'j2_tras_perder',
-        'cwp_signal'
+        'wsls_trend'
     ]
     return df[cols].fillna(SENTINEL_VALUE), df['proxima_jugada_j2'].astype(int)
 
-
 # =============================================================================
-# PARTE 3: ENTRENAMIENTO (MODELO BASE)
+# 3. ENTRENAMIENTO
 # =============================================================================
 
 def entrenar_modelo(X, y):
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+    if X is None or len(X) < 10:
+        print("⚠️ Pocos datos para entrenar ML. Se usará solo lógica en vivo.")
+        return None
 
-    # Usamos Gradient Boosting (mejor generalización que Random Forest en RPS)
-    modelo = GradientBoostingClassifier(n_estimators=200, learning_rate=0.05, max_depth=3, random_state=42)
-    modelo.fit(X_train, y_train)
-
-    acc = accuracy_score(y_test, modelo.predict(X_test))
-    print(f"\n📊 Modelo Base (Gradient Boosting) Accuracy: {acc:.2%}")
+    # Gradient Boosting robusto
+    modelo = GradientBoostingClassifier(
+        n_estimators=100,
+        learning_rate=0.05,
+        max_depth=3,
+        random_state=42
+    )
+    modelo.fit(X, y)
     return modelo
 
-
 # =============================================================================
-# PARTE 4: CEREBRO HÍBRIDO (CLASE JUGADOR IA)
+# 4. CEREBRO HÍBRIDO (ENSAMBLE)
 # =============================================================================
 
 class JugadorIA:
     def __init__(self, ruta_modelo=None):
-        self.historial = [] # [(j1, j2), ...]
+        self.historial = []
 
-        # --- MEMORIA VIVA (Live Learning) ---
-        # Almacena secuencias: {(prev_j2, prev_j1): {next_j2: count}}
-        self.memoria_ngramas = defaultdict(lambda: defaultdict(int))
+        # --- CEREBRO MARKOV (Live) ---
+        # Almacena transiciones de patrones: { "Patron_Previo": {Jugada_Siguiente: Conteo} }
+        self.markov_chain = defaultdict(lambda: defaultdict(float))
+        self.decay_factor = 0.9 # Los patrones viejos valen menos
 
-        # Modelo Estático
+        # --- CEREBRO ML ---
         self.feature_cols = [
-            'j2_lag1', 'j2_lag2', 'j1_lag1',
-            'seq_j2_2',
+            'j2_lag1', 'j2_lag2', 'j1_lag1', 'j1_lag2',
+            'seq_j2_2', 'seq_mix_2',
             'roll_freq_0', 'roll_freq_1', 'roll_freq_2',
-            'j2_tras_ganar', 'j2_tras_perder',
-            'cwp_signal'
+            'wsls_trend'
         ]
 
         if ruta_modelo is None: ruta_modelo = RUTA_MODELO
         try:
             with open(ruta_modelo, "rb") as f:
                 self.modelo = pickle.load(f)
-            print("✅ Modelo cargado.")
+            print("✅ Cerebro ML cargado.")
         except:
             self.modelo = None
-            print("⚠️ Jugando sin modelo base (solo aprendizaje en vivo).")
+            print("⚠️ Jugando sin Cerebro ML (usando solo Markov + Estadística).")
 
     def registrar_ronda(self, j1, j2):
-        # Antes de guardar, aprendemos de lo que ACABA de pasar
-        if len(self.historial) >= 1:
-            prev_j1_num = JUGADA_A_NUM[self.historial[-1][0]]
-            prev_j2_num = JUGADA_A_NUM[self.historial[-1][1]]
-            curr_j2_num = JUGADA_A_NUM[j2]
+        # 1. Actualizar Cadenas de Markov (Aprender en Vivo)
+        if len(self.historial) >= 2:
+            # Definimos varios contextos (N-Gramas)
 
-            # Key: Estado Anterior (Tú jugada anterior, Mi jugada anterior)
-            key = (prev_j2_num, prev_j1_num)
-            self.memoria_ngramas[key][curr_j2_num] += 1
+            # Contexto A: Tus últimas 2 jugadas
+            last_j2 = JUGADA_A_NUM[self.historial[-1][1]]
+            prev_j2 = JUGADA_A_NUM[self.historial[-2][1]]
+            key_A = f"J2_{prev_j2}_{last_j2}"
+
+            # Contexto B: Tu última jugada + Mi última jugada
+            last_j1 = JUGADA_A_NUM[self.historial[-1][0]]
+            key_B = f"MIX_{last_j1}_{last_j2}"
+
+            # La jugada que acabas de hacer ahora
+            curr_j2 = JUGADA_A_NUM[j2]
+
+            # Actualizamos contadores con Decay (olvido gradual)
+            for k in self.markov_chain:
+                for move in self.markov_chain[k]:
+                    self.markov_chain[k][move] *= self.decay_factor
+
+            self.markov_chain[key_A][curr_j2] += 1.0
+            self.markov_chain[key_B][curr_j2] += 1.0
 
         self.historial.append((j1, j2))
 
-    def _get_live_prediction(self):
-        """Busca patrones en la memoria viva de esta partida."""
-        if len(self.historial) < 1: return None
+    def _get_markov_probs(self):
+        """Devuelve probabilidades basadas en patrones recientes."""
+        probs = np.zeros(3)
+        if len(self.historial) < 2: return probs # [0,0,0]
 
-        # Estado actual
-        last_j1 = JUGADA_A_NUM[self.historial[-1][0]]
         last_j2 = JUGADA_A_NUM[self.historial[-1][1]]
-        key = (last_j2, last_j1)
+        prev_j2 = JUGADA_A_NUM[self.historial[-2][1]]
+        last_j1 = JUGADA_A_NUM[self.historial[-1][0]]
 
-        # ¿Hemos visto esta situación antes en esta partida?
-        if key in self.memoria_ngramas:
-            counts = self.memoria_ngramas[key]
-            # Devuelve la jugada que más veces ha hecho el oponente en esta situación
-            predicted_move = max(counts, key=counts.get)
-            confidence = counts[predicted_move]
+        key_A = f"J2_{prev_j2}_{last_j2}"
+        key_B = f"MIX_{last_j1}_{last_j2}"
 
-            # Solo confiamos si lo ha hecho al menos una vez (se puede subir el umbral)
-            if confidence >= 1:
-                return predicted_move
-        return None
+        # Sumamos la evidencia de ambos contextos
+        total_evidence = defaultdict(float)
 
-    def _get_features(self):
-        N = len(self.historial)
-        if N < 3: return np.full((1, len(self.feature_cols)), SENTINEL_VALUE)
+        for k in [key_A, key_B]:
+            if k in self.markov_chain:
+                for move, score in self.markov_chain[k].items():
+                    total_evidence[move] += score
 
-        j1s = [JUGADA_A_NUM[x[0]] for x in self.historial]
-        j2s = [JUGADA_A_NUM[x[1]] for x in self.historial]
+        # Normalizar a probabilidades
+        total_score = sum(total_evidence.values())
+        if total_score > 0:
+            for move, score in total_evidence.items():
+                probs[move] = score / total_score
 
-        # Helper resultados
-        res = []
-        for a, b in zip(j1s, j2s):
-            if a == b: res.append(0)
-            elif GANA_A[NUM_A_JUGADA[a]] == NUM_A_JUGADA[b]: res.append(1)
-            else: res.append(-1)
+        return probs
 
-        f = {}
-        f['j2_lag1'] = j2s[-1]
-        f['j2_lag2'] = j2s[-2]
-        f['j1_lag1'] = j1s[-1]
-        f['seq_j2_2'] = j2s[-1]*10 + j2s[-2]
+    def _get_ml_probs(self):
+        """Devuelve probabilidades del modelo Gradient Boosting."""
+        if self.modelo is None or len(self.historial) < 3:
+            return np.array([0.33, 0.33, 0.33])
 
-        last_10 = j2s[-11:-1] if N > 1 else []
-        L = len(last_10) if last_10 else 1
-        f['roll_freq_0'] = last_10.count(0)/L
-        f['roll_freq_1'] = last_10.count(1)/L
-        f['roll_freq_2'] = last_10.count(2)/L
+        try:
+            # Reconstruir vector de features al vuelo
+            j1s = [JUGADA_A_NUM[x[0]] for x in self.historial]
+            j2s = [JUGADA_A_NUM[x[1]] for x in self.historial]
 
-        f['j2_tras_ganar'] = j2s[-2] if res[-2] == -1 else -1
-        f['j2_tras_perder'] = j2s[-2] if res[-2] == 1 else -1
-        f['cwp_signal'] = JUGADA_A_NUM[PIERDE_CONTRA[NUM_A_JUGADA[j2s[-1]]]]
+            f = {}
+            f['j2_lag1'] = j2s[-1]
+            f['j2_lag2'] = j2s[-2]
+            f['j1_lag1'] = j1s[-1]
+            f['j1_lag2'] = j1s[-2]
+            f['seq_j2_2'] = j2s[-1]*10 + j2s[-2]
+            f['seq_mix_2'] = j2s[-1]*10 + j1s[-1]
 
-        return np.array([f.get(c, -1) for c in self.feature_cols]).reshape(1, -1)
+            last_10 = j2s[-11:-1] if len(j2s)>1 else []
+            L = len(last_10) if last_10 else 1
+            f['roll_freq_0'] = last_10.count(0)/L
+            f['roll_freq_1'] = last_10.count(1)/L
+            f['roll_freq_2'] = last_10.count(2)/L
+
+            # WSLS
+            # Resultado hace 2 turnos (-1 es que ganó J2)
+            if len(self.historial) >= 2:
+                # Calcular resultado ronda anterior
+                r_prev = -1 # Default
+                if j1s[-2] == j2s[-2]: r_prev = 0
+                elif GANA_A[NUM_A_JUGADA[j1s[-2]]] == NUM_A_JUGADA[j2s[-2]]: r_prev = 1
+                else: r_prev = -1
+
+                f['wsls_trend'] = 1 if (r_prev == -1 and j2s[-1] == j2s[-2]) else 0
+            else:
+                f['wsls_trend'] = 0
+
+            feat_vector = np.array([f.get(c, SENTINEL_VALUE) for c in self.feature_cols]).reshape(1, -1)
+            return self.modelo.predict_proba(feat_vector)[0]
+        except:
+            return np.array([0.33, 0.33, 0.33])
 
     def decidir_jugada(self):
-        # ---------------------------------------------------------
-        # NIVEL 0: ANTI-SPAM AGRESIVO (Reflejo)
-        # ---------------------------------------------------------
-        # Si las últimas 2 jugadas son iguales, asumimos que repetirá.
-        if len(self.historial) >= 2:
-            h = self.historial
-            if h[-1][1] == h[-2][1]: # J2 repitió jugada
-                pred = JUGADA_A_NUM[h[-1][1]]
-                # print(f"DEBUG: Spam detectado ({NUM_A_JUGADA[pred]})")
-                return PIERDE_CONTRA[NUM_A_JUGADA[pred]]
+        # 1. Anti-Spam Hardcoded (Seguridad Máxima)
+        # Si repite 3 veces, asumimos la 4ta.
+        if len(self.historial) >= 3:
+            ultimas_3 = [x[1] for x in self.historial[-3:]]
+            if ultimas_3[0] == ultimas_3[1] == ultimas_3[2]:
+                pred_spam = JUGADA_A_NUM[ultimas_3[0]]
+                return PIERDE_CONTRA[NUM_A_JUGADA[pred_spam]]
 
-        # ---------------------------------------------------------
-        # NIVEL 1: MEMORIA VIVA (Lo que está pasando AHORA)
-        # ---------------------------------------------------------
-        live_pred = self._get_live_prediction()
-        if live_pred is not None:
-            # print(f"DEBUG: Patrón vivo detectado ({NUM_A_JUGADA[live_pred]})")
-            return PIERDE_CONTRA[NUM_A_JUGADA[live_pred]]
+        # 2. OBTENER PROBABILIDADES DE CEREBROS
+        probs_markov = self._get_markov_probs() # Cerebro Rápido
+        probs_ml = self._get_ml_probs()         # Cerebro Lento
 
-        # ---------------------------------------------------------
-        # NIVEL 2: MODELO ML (Intuición General)
-        # ---------------------------------------------------------
-        if self.modelo and len(self.historial) >= 3:
-            try:
-                feats = self._get_features()
-                probs = self.modelo.predict_proba(feats)[0]
-                pred_idx = np.argmax(probs)
+        # 3. PONDERACIÓN (VOTACIÓN)
+        # En partidas cortas, Markov vale más (0.6) que el ML (0.4)
+        # porque el ML necesita más historia para ser útil.
+        peso_markov = 0.65
+        peso_ml = 0.35
 
-                # Diversificación ligera (si top 2 están cerca, azar)
-                sorted_idx = np.argsort(probs)[::-1]
-                if probs[sorted_idx[1]] > 0.8 * probs[sorted_idx[0]]:
-                    pred_idx = np.random.choice(sorted_idx[:2])
+        # Si Markov no tiene datos (inicio partida), confiamos más en ML o Random
+        if np.sum(probs_markov) == 0:
+            final_probs = probs_ml
+        else:
+            final_probs = (probs_markov * peso_markov) + (probs_ml * peso_ml)
 
-                return PIERDE_CONTRA[NUM_A_JUGADA[pred_idx]]
-            except:
-                pass
+        # 4. DECISIÓN FINAL CON ANTI-ESPEJO
+        # No solo tomamos el máximo, analizamos el riesgo de empate.
+        pred_idx = np.argmax(final_probs)
 
-        # Fallback: Aleatorio
-        return np.random.choice(["piedra", "papel", "tijera"])
+        # Heurística: Si la probabilidad de predicción es baja (<45%),
+        # y esa predicción es igual a mi última jugada, hay riesgo de "Loop de Empate".
+        # Intentamos cambiar a la segunda mejor opción.
+        if len(self.historial) > 0:
+            mi_ultima = JUGADA_A_NUM[self.historial[-1][0]] # Lo que YO jugué
+            op_ultima = JUGADA_A_NUM[self.historial[-1][1]] # Lo que TÚ jugaste
 
+            # Si predigo que vas a repetir tu última jugada, y la certeza es baja...
+            if pred_idx == op_ultima and final_probs[pred_idx] < 0.5:
+                # A veces la gente cambia tras un empate/derrota.
+                # Subimos un poco el peso de la opción que gana a tu última jugada (Counter-Shift)
+                shift_idx = (op_ultima + 1) % 3 # Ciclo 0->1->2->0
+                final_probs[shift_idx] += 0.15
+                pred_idx = np.argmax(final_probs)
+
+        return PIERDE_CONTRA[NUM_A_JUGADA[pred_idx]]
 
 # =============================================================================
 # MAIN
@@ -289,29 +322,29 @@ class JugadorIA:
 
 def main():
     print("="*60)
-    print("   RPSAI v4.0 - Entrenamiento Híbrido (Live Learning)")
+    print("   RPSAI v5.0 - ENSAMBLE PONDERADO (Markov + GB + Anti-Spam)")
     print("="*60)
 
     try:
-        # 1. Cargar y Entrenar
         df = cargar_datos()
         df = preparar_datos(df)
-        df = crear_features(df)
-        X, y = seleccionar_features(df)
 
-        # Verificar clases
-        if len(y.unique()) < 3:
-            print("⚠️ Advertencia: El dataset no tiene ejemplos de las 3 jugadas.")
+        modelo = None
+        if len(df) > 10:
+            print("\n⚙️ Entrenando Cerebro ML Base...")
+            df = crear_features(df)
+            X, y = seleccionar_features(df)
+            if X is not None:
+                modelo = entrenar_modelo(X, y)
+        else:
+            print("\n⚠️ Sin historial previo suficiente. La IA aprenderá 100% en vivo.")
 
-        modelo = entrenar_modelo(X, y)
-
-        # 2. Guardar
+        # Guardar
         RUTA_MODELO.parent.mkdir(parents=True, exist_ok=True)
         with open(RUTA_MODELO, "wb") as f:
             pickle.dump(modelo, f)
 
-        print("\n✅ ¡IA Actualizada a v4.0!")
-        print("   Estrategia: Anti-Spam (2 rep) -> Patrón Vivo -> Modelo ML")
+        print("\n✅ ¡IA Lista! La arquitectura v5.0 está activa.")
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
